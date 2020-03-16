@@ -1,8 +1,8 @@
 # Loading the Packages -------------------------------------
 
 #Setting the required packages
-pkgs <- c("shiny", "shinydashboard", "shinyWidgets",
-          "RMySQL", "tidyverse",
+pkgs <- c("shiny", "shinydashboard", "shinyWidgets", "viridis",
+          "RMySQL", "tidyverse", "ggExtra",
           "plotly", "caret",
           "dplyr", "lubridate",
           "DT", "knitr", "kableExtra"
@@ -36,15 +36,21 @@ yr_2008 <- dbGetQuery(con, paste(query_data, "yr_2008"))
 yr_2009 <- dbGetQuery(con, paste(query_data, "yr_2009"))
 yr_2010 <- dbGetQuery(con, paste(query_data, "yr_2010"))
 rm(query_data)
+dbDisconnect(con)
 
-number <- 300
-submeter_data <- bind_rows(head(yr_2007, number), head(yr_2008, number), head(yr_2009, number), head(yr_2010, number))
+#number <- 300
+#submeter_data <- bind_rows(head(yr_2007, number), head(yr_2008, number), head(yr_2009, number), head(yr_2010, number))
+submeter_data <- bind_rows(yr_2006, yr_2007, yr_2008, yr_2009, yr_2010)
 rm(yr_2006, yr_2007, yr_2008, yr_2009, yr_2010)
 
 ## combine the two attributes and convert the data type
 submeter_data <- submeter_data %>% 
-  mutate(datetime = as.POSIXct(paste(Date, Time, sep = "T"), tz = "Europe/Paris")) %>% 
+  mutate(datetime = as.POSIXct(paste(Date, Time), format="%Y-%m-%d %H:%M:%S", tz = "Europe/Paris")) %>% 
   select(datetime, starts_with("Sub_"))
+
+## for now, na's are omitted
+submeter_data <- na.omit(submeter_data)
+
 
 # UI Function -------------------------------------
 ui <- dashboardPage(
@@ -174,12 +180,12 @@ ui <- dashboardPage(
                                                  choices = c("Grouped bar chart" = "dodge", "Stacked bar chart" = "fill"), 
                                                  selected = c("Grouped bar chart")),
                                      selectInput("freq_bar", "Time period:", 
-                                                 choices = c("Year", "Month", "Weekday", "Day"), selected = "Year")
+                                                 choices = c("Year", "Month", "Weekdays", "Day"), selected = "Year")
                                  )
                           ),
                           column(width = 8,
                                  box(width = NULL,
-                                     title = "Input", status = "success", solidHeader = TRUE,
+                                     title = "DataTable", status = "success", solidHeader = TRUE,
                                      DT::DTOutput("table_bar")
                                  )
                           )
@@ -195,11 +201,29 @@ ui <- dashboardPage(
         tabName = "heatmaps",
         fluidRow(
           tabBox(width = NULL,
-                 tabPanel("Data"
-                          
+                 tabPanel("Data",
+                          br(),
+                          column(width = 4,
+                                 box(width = NULL,
+                                     title = "Input", status = "success", solidHeader = TRUE,
+                                     pickerInput("submeter_heat", "Submeter location:", 
+                                                 choices = c("Kitchen" = "Sub_metering_1", "Laundry room" = "Sub_metering_2", "Water-heater/Air-conditioner" = "Sub_metering_3"),
+                                                 multiple = TRUE, selected = c("Kitchen", "Laundry room", "Water-heater/Air-conditioner"), options = list(`actions-box` = TRUE)),
+                                     dateRangeInput("dates_heat", "Date range:", 
+                                                    start = min(submeter_data$datetime), end = max(submeter_data$datetime)),
+                                     selectInput("freq_heat", "Time period:", 
+                                                 choices = c("Year", "Month", "Weekdays", "Day", "Hour"), multiple = TRUE, selected = c("Year", "Month"))
+                                 )
+                          ),
+                          column(width = 8,
+                                 box(width = NULL,
+                                     title = "DataTable", status = "success", solidHeader = TRUE,
+                                     DT::DTOutput("table_heat")
+                                 )
+                          )
                  ),
-                 tabPanel("Heatmap"
-                          
+                 tabPanel("Heatmap", br(),
+                          plotlyOutput("plot_heat")
                  )
           )
         )
@@ -251,12 +275,12 @@ server <- function(input, output, session) {
         pivot_longer(-month, names_to = "Sub_metering", values_to = "Watt_hour") %>%
         ggplot(aes(month, Watt_hour, fill = Sub_metering))
       
-    }else if(input$freq_bar == "Weekday"){
+    }else if(input$freq_bar == "Weekdays"){
       p <- submeter_data_barplot() %>% 
-        group_by(weekday = weekdays(datetime)) %>%  
+        group_by(weekdays = weekdays(datetime)) %>%  
         summarize_at(input$submeter_bar, sum) %>% 
-        pivot_longer(-weekday, names_to = "Sub_metering", values_to = "Watt_hour") %>%
-        ggplot(aes(weekday, Watt_hour, fill = Sub_metering))
+        pivot_longer(-weekdays, names_to = "Sub_metering", values_to = "Watt_hour") %>%
+        ggplot(aes(weekdays, Watt_hour, fill = Sub_metering))
       
     }else if(input$freq_bar == "Day"){
       p <- submeter_data_barplot() %>% 
@@ -277,6 +301,65 @@ server <- function(input, output, session) {
         labels = c("Kitchen", "Laundry", "Heater")
       )
     p
+  })
+
+  # Heatmap - filter the database ----------------------------------------------------
+  observeEvent(length(input$freq_heat) > 2, {
+    showModal("Please select up to two variables.")
+  })
+  
+  submeter_data_heatmap <- reactive({
+    submeter_data %>% 
+      filter(datetime >= input$dates_heat[1], datetime <= input$dates_heat[2]) %>% 
+      select(datetime, input$submeter_heat)
+  })
+  
+  # Heatmap - show the database ------------------------------------------------------
+  output$table_heat <- DT::renderDataTable({
+    head(submeter_data_heatmap(), 25)
+  })
+  
+  output$plot_heat <- renderPlotly({
+    data_heat <- submeter_data_heatmap()
+    
+    for(i in c("Year", "Month", "Weekdays", "Day", "Hour")){
+      if(i %in% input$freq_heat){
+        if(i == "Month"){
+          data_heat[[i]] <- do.call(tolower(i), list(data_heat$datetime, label = TRUE))
+        }else{
+          data_heat[[i]] <- do.call(tolower(i), list(data_heat$datetime))
+        }
+      }
+    }
+    
+    col_name1 <- as.name(input$freq_heat[1])
+    col_name2 <- as.name(input$freq_heat[2])
+    
+    data_summarised <- data_heat %>% 
+      group_by(!! col_name1, !! col_name2) %>% 
+      summarise_at(input$submeter_heat, sum)
+    
+    # heatmap
+    data_summarised %>%
+      pivot_longer(cols = starts_with("Sub"), names_to = "submetering", 
+                   values_to = "Watt") %>%
+      ggplot(aes_string(input$freq_heat[1], input$freq_heat[2])) +
+      geom_tile(aes(fill = Watt), colour = "white") +
+      scale_fill_viridis(name = "Watt sum", option = "C") +
+      labs(title = "",
+           x = "Year",
+           y = "Month",
+           fill = "Sum of Watt") +
+      theme_bw() +
+      theme_minimal() +
+      facet_wrap(vars(submetering), labeller = as_labeller(
+        c(
+          `Sub_metering_1` = "Kitchen",
+          `Sub_metering_2` = "Laundry room",
+          `Sub_metering_3` = "Water-heater/AC"
+        )
+      )) +
+      removeGrid()
   })
 }
 
