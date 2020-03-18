@@ -175,7 +175,8 @@ ui <- dashboardPage(
                                                  choices = c("Kitchen" = "Sub_metering_1", "Laundry room" = "Sub_metering_2", "Water-heater/Air-conditioner" = "Sub_metering_3"),
                                                  multiple = TRUE, selected = c("Kitchen", "Laundry room", "Water-heater/Air-conditioner"), options = list(`actions-box` = TRUE)),
                                      dateRangeInput("dates_bar", "Date range:", 
-                                                    start = min(submeter_data$datetime), end = max(submeter_data$datetime)),
+                                                    min = min(submeter_data$datetime), max = max(submeter_data$datetime),
+                                                    start = "2007-01-01", end = max(submeter_data$datetime)),
                                      selectInput("position_bar", "Barplot type:", 
                                                  choices = c("Grouped bar chart" = "dodge", "Stacked bar chart" = "fill"), 
                                                  selected = c("Grouped bar chart")),
@@ -210,7 +211,8 @@ ui <- dashboardPage(
                                                  choices = c("Kitchen" = "Sub_metering_1", "Laundry room" = "Sub_metering_2", "Water-heater/Air-conditioner" = "Sub_metering_3"),
                                                  multiple = TRUE, selected = c("Kitchen", "Laundry room", "Water-heater/Air-conditioner"), options = list(`actions-box` = TRUE)),
                                      dateRangeInput("dates_heat", "Date range:", 
-                                                    start = min(submeter_data$datetime), end = max(submeter_data$datetime)),
+                                                    min = min(submeter_data$datetime), max = max(submeter_data$datetime),
+                                                    start = "2007-01-01", end = max(submeter_data$datetime)),
                                      selectInput("freq_heat", "Time period:", 
                                                  choices = c("Year", "Month", "Weekdays", "Day", "Hour"), multiple = TRUE, selected = c("Year", "Month"))
                                  )
@@ -223,7 +225,7 @@ ui <- dashboardPage(
                           )
                  ),
                  tabPanel("Heatmap", br(),
-                          plotlyOutput("plot_heat")
+                          plotlyOutput("plot_heat", width = "auto")
                  )
           )
         )
@@ -233,10 +235,32 @@ ui <- dashboardPage(
         tabName = "lines",
         fluidRow(
           tabBox(width = NULL,
-                 tabPanel("Data"
+                 tabPanel("Data",
+                          br(),
+                          column(width = 4,
+                                 box(width = NULL,
+                                     title = "Input", status = "success", solidHeader = TRUE,
+                                     pickerInput("submeter_line", "Submeter location:", 
+                                                 choices = c("Kitchen" = "Sub_metering_1", "Laundry room" = "Sub_metering_2", "Water-heater/Air-conditioner" = "Sub_metering_3"),
+                                                 multiple = TRUE, selected = c("Kitchen", "Laundry room", "Water-heater/Air-conditioner"), options = list(`actions-box` = TRUE)),
+                                     dateRangeInput("dates_line", "Date range:", 
+                                                    min = min(submeter_data$datetime), max = max(submeter_data$datetime),
+                                                    start = "2007-01-01", end = max(submeter_data$datetime)),
+                                     selectInput("freq_line", "Time period:", 
+                                                 choices = c("Month", "Week", "Day", "Hour"), selected = c("Month")),
+                                     checkboxInput("smooth_line", "With Smooth line?", FALSE)
+                                 )
+                          ),
+                          column(width = 8,
+                                 box(width = NULL,
+                                     title = "DataTable", status = "success", solidHeader = TRUE,
+                                     DT::DTOutput("table_line")
+                                 )
+                          )
                           
                  ),
-                 tabPanel("Lines"
+                 tabPanel("Lines", br(),
+                          plotlyOutput("plot_line")
                           
                  )
           )
@@ -319,6 +343,7 @@ server <- function(input, output, session) {
     head(submeter_data_heatmap(), 25)
   })
   
+  # Heatmap - plot heatmaps ------------------------------------------------------
   output$plot_heat <- renderPlotly({
     data_heat <- submeter_data_heatmap()
     
@@ -347,8 +372,8 @@ server <- function(input, output, session) {
       geom_tile(aes(fill = Watt), colour = "white") +
       scale_fill_viridis(name = "Watt sum", option = "C") +
       labs(title = "",
-           x = "Year",
-           y = "Month",
+           x = input$freq_heat[1],
+           y = input$freq_heat[2],
            fill = "Sum of Watt") +
       theme_bw() +
       theme_minimal() +
@@ -360,6 +385,83 @@ server <- function(input, output, session) {
         )
       )) +
       removeGrid()
+  })
+  
+  # Line - filter the database ----------------------------------------------------
+  submeter_data_line <- reactive({
+    submeter_data %>% 
+      filter(datetime >= input$dates_line[1], datetime <= input$dates_line[2]) %>% 
+      select(datetime, input$submeter_line)
+  })
+  
+  # Line - show the database ------------------------------------------------------
+  output$table_line <- DT::renderDataTable({
+    head(submeter_data_line(), 25)
+  })
+  
+  # Line - lines plot ------------------------------------------------------------
+  output$plot_line <- renderPlotly({
+    data_line <- submeter_data_line()
+    
+    if(input$freq_line == "Month"){
+      data_line <- data_line %>% 
+        group_by(Year = year(datetime), Month = month(datetime)) %>% 
+        summarise_at(input$submeter_line, sum) %>% 
+        mutate(date = make_date(Year, Month)) %>% 
+        ungroup() %>% 
+        select(-Year, -Month)
+      
+    }else if(input$freq_line == "Week"){
+      data_line <- data_line %>% 
+        group_by(Year = year(datetime), Month = month(datetime), Week = week(datetime)) %>% 
+        summarise_at(input$submeter_line, sum) %>% 
+        mutate(date = make_date(Year, Month)) %>% 
+        ungroup() %>% 
+        select(-Year, -Month, -Week)
+      
+    }else if(input$freq_line == "Day"){
+      data_line <- data_line %>% 
+        group_by(Year = year(datetime), Month = month(datetime), Day = day(datetime)) %>% 
+        summarise_at(input$submeter_line, sum) %>% 
+        mutate(date = make_date(Year, Month, Day)) %>% 
+        ungroup() %>% 
+        select(-Year, -Month, -Day)
+      
+    }else if(input$freq_line == "Hour"){
+      data_line <- data_line %>% 
+        group_by(Year = year(datetime), Month = month(datetime), Day = day(datetime), Hour = hour(datetime)) %>% 
+        summarise_at(input$submeter_line, sum) %>% 
+        mutate(date = make_datetime(Year, Month, Day, Hour)) %>% 
+        ungroup() %>% 
+        select(-Year, -Month, -Day, -Hour)
+    }
+    
+    
+    p <- data_line %>% 
+      pivot_longer(cols = starts_with("Sub"), names_to = "submetering", values_to = "Watt") %>% 
+      ggplot(aes(date, Watt)) + 
+      geom_line(aes(color = submetering)) + 
+      scale_color_discrete(breaks=c("sum_sub1", "sum_sub2", "sum_sub3"),
+                           labels=c("Kitchen", "Laundry room", "Heater")) +
+      labs(
+        x = "",
+        y = "Sum of Watt",
+        color = "Submetering"
+      ) +
+      theme_bw() + 
+      theme_minimal()
+    
+    if(input$smooth_line){
+      p <- p + stat_smooth(color = "#FC4E07", fill = "#FC4E07", method = "gam") + 
+        facet_wrap(vars(submetering), labeller = as_labeller(
+          c(
+            `Sub_metering_1` = "Kitchen",
+            `Sub_metering_2` = "Laundry room",
+            `Sub_metering_3` = "Water-heater/AC"
+          )
+        ))
+    }
+    p
   })
 }
 
